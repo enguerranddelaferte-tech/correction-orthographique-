@@ -121,6 +121,17 @@ button{font:inherit;cursor:pointer}
 .colchip input{margin-top:3px;accent-color:var(--accent)}
 .colchip span{display:flex;flex-direction:column;min-width:0}
 .colchip small{color:var(--muted);font-size:12px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.searchrow{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+#search{flex:1 1 240px;min-width:0;font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:7px;background:var(--sheet);color:var(--ink)}
+#search:focus{outline:2px solid var(--accent);outline-offset:1px}
+.wr{display:flex;align-items:center;gap:10px}
+.editbtn{font:inherit;font-family:var(--f-ui);font-size:12.5px;font-weight:600;border:1px solid var(--line);background:var(--sheet);color:var(--accent);border-radius:6px;padding:3px 10px;cursor:pointer}
+.editbtn:hover{border-color:var(--accent)}
+.editbtn:focus-visible,.ed:focus{outline:2px solid var(--accent);outline-offset:1px}
+.ed{width:100%;font-family:var(--f-text);font-size:16px;line-height:1.6;padding:10px 12px;border:1px solid var(--accent);border-radius:8px;background:var(--sheet);color:var(--ink);resize:vertical}
+.item.manual{border-color:var(--ins)}
+.src-M{color:var(--ins);background:var(--ins-bg)}
 .credit{color:var(--muted);font-size:12.5px;margin:0;text-align:center}
 @media (max-width:480px){.panel{padding:16px}.item .txt{font-size:15.5px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -169,7 +180,12 @@ button{font:inherit;cursor:pointer}
       <span class="count" id="count"></span>
     </div>
     <div class="stats" id="stats" hidden></div>
-    <p class="how">Chaque correction est acceptée par défaut. Touchez-la pour la refuser, touchez à nouveau pour l'accepter. <span id="legend" hidden>Quand les deux correcteurs proposent des corrections différentes au même endroit, une seule peut être acceptée.</span></p>
+    <p class="how">Chaque correction est acceptée par défaut. Touchez-la pour la refuser, touchez à nouveau pour l'accepter. « Modifier » permet de retoucher le texte vous-même ; pour un lot sans proposition, cherchez son numéro. <span id="legend" hidden>Quand les deux correcteurs proposent des corrections différentes au même endroit, une seule peut être acceptée.</span></p>
+    <div class="searchrow">
+      <label class="sr" for="search">Rechercher un lot ou un mot</label>
+      <input type="search" id="search" placeholder="Aller au lot n° ou chercher un mot…" autocomplete="off">
+      <span class="meta" id="searchHint"></span>
+    </div>
     <div class="row">
       <button class="btn" id="allOn">Tout accepter</button>
       <button class="btn" id="allOff">Tout refuser</button>
@@ -639,8 +655,9 @@ function setRunning(on){
 }
 const countChunks = () => st.items.reduce((n, it) => n + (it.chunks && !it.skip ? it.chunks.length : 0), 0);
 const countOn = () => st.items.reduce((n, it) => n + (it.chunks && !it.skip ? it.chunks.filter(c => c.on).length : 0), 0);
-const SRC = { C:'Claude', L:'Libre', LC:'Les deux' };
-const SRCSHORT = { C:'C', L:'L', LC:'C+L' };
+const SRC = { C:'Claude', L:'Libre', LC:'Les deux', M:'Manuel' };
+const SRCSHORT = { C:'C', L:'L', LC:'C+L', M:'Main' };
+const corrected = it => { let out = '', pos = 0; [...(it.chunks || [])].filter(c => c.on).sort((a, b) => a.start - b.start).forEach(c => { if (c.start < pos) return; out += it.text.slice(pos, c.start) + c.ins; pos = endOf(c); }); return out + it.text.slice(pos); };
 
 function vis(s){ return esc(s).replace(/\t/g, '<span class="ell">→</span>\t').replace(/\n/g, '<span class="ell">↵</span>\n'); }
 function wsMark(s){ return s.trim() ? vis(s) : '<span title="espace">␣</span>'; }
@@ -653,7 +670,14 @@ function chunkHtml(it, c, idx, k, badges){
   return `<button class="chg${c.on ? '' : ' off'}" data-i="${idx}" data-k="${k}" aria-pressed="${c.on}" title="${label}" aria-label="${esc(c.del || '∅')} vers ${esc(c.ins || '∅')}, ${label}">${inner}${badge}</button>`;
 }
 function renderItem(it, idx){
-  const badges = st.resultEngine === 'compare';
+  if (it.editing){
+    return `<article class="item editing"><div class="where"><span>${esc(it.label)}</span><span>Modification</span></div>
+<label class="sr" for="ed-${idx}">Texte de ${esc(it.label)}</label>
+<textarea class="ed" id="ed-${idx}" rows="${Math.min(14, Math.max(3, Math.ceil(it.text.length / 70)))}">${esc(corrected(it))}</textarea>
+<div class="row"><button class="btn primary act" data-act="save" data-i="${idx}">Enregistrer</button><button class="btn act" data-act="cancel" data-i="${idx}">Annuler</button><button class="btn act" data-act="orig" data-i="${idx}">Remettre le texte d’origine</button></div></article>`;
+  }
+  it.chunks = it.chunks || [];
+  const badges = st.resultEngine === 'compare' || it.chunks.some(c => c.src === 'M');
   const order = it.chunks.map((c, k) => [c, k]);
   const clusters = [];
   for (const pair of order){
@@ -676,11 +700,13 @@ function renderItem(it, idx){
   parts.push(ctx(it.text.slice(pos), 'end'));
   const n = it.chunks.length;
   const reasons = (it.reasons || []).map(r => `<li>${badges ? `<span class="src src-${r.src}">${SRCSHORT[r.src]}</span> ` : ''}<b>${esc(r.avant || '∅')} → ${esc(r.apres || '∅')}</b> · ${esc(r.raison)}</li>`).join('');
-  return `<article class="item"><div class="where"><span>${esc(it.label)}</span><span>${n} proposition${n > 1 ? 's' : ''}</span></div><div class="txt">${parts.join('')}</div>${reasons ? `<ul class="reasons">${reasons}</ul>` : ''}</article>`;
+  const status = it.manual ? 'modifié à la main' : n ? `${n} proposition${n > 1 ? 's' : ''}` : 'aucune proposition';
+  return `<article class="item${it.manual ? ' manual' : ''}"><div class="where"><span>${esc(it.label)}</span><span class="wr">${status}<button class="editbtn act" data-act="edit" data-i="${idx}" aria-label="Modifier ${esc(it.label)}">Modifier</button></span></div><div class="txt">${parts.join('')}</div>${reasons ? `<ul class="reasons">${reasons}</ul>` : ''}</article>`;
 }
 function updateCount(){
   const total = countChunks(), on = countOn(), shown = st.items.filter(it => it.chunks && it.chunks.length && !it.skip).length;
-  $('count').textContent = total ? `${fmt(total)} proposition${total > 1 ? 's' : ''} dans ${fmt(shown)} passage${shown > 1 ? 's' : ''} · ${fmt(on)} acceptée${on > 1 ? 's' : ''}` : '';
+  const man = st.items.filter(it => it.manual && !it.skip).length;
+  $('count').textContent = total ? `${fmt(total)} proposition${total > 1 ? 's' : ''} dans ${fmt(shown)} passage${shown > 1 ? 's' : ''} · ${fmt(on)} acceptée${on > 1 ? 's' : ''}` + (man ? ` · ${fmt(man)} modifié${man > 1 ? 's' : ''} à la main` : '') : '';
   const cmp = st.resultEngine === 'compare' && total;
   $('stats').hidden = !cmp; $('legend').hidden = !cmp;
   if (cmp){
@@ -691,12 +717,21 @@ function updateCount(){
   }
 }
 function render(){
-  const shown = st.items.map((it, i) => [it, i]).filter(([it]) => it.chunks && it.chunks.length && !it.skip);
+  const qv = ($('search').value || '').trim().toLowerCase();
+  const lotq = qv.replace(/^lot\s*/, '');
+  let shown = st.items.map((it, i) => [it, i]).filter(([it]) => !it.skip && (qv
+    ? ((it.col && it.col.lot && it.col.lot.toLowerCase() === lotq) || it.label.toLowerCase().includes(qv) || it.text.toLowerCase().includes(qv))
+    : ((it.chunks && it.chunks.length) || it.editing || it.manual)));
+  const exact = qv ? shown.filter(([it]) => it.col && it.col.lot && it.col.lot.toLowerCase() === lotq) : [];
+  if (exact.length) shown = exact;
+  const more = qv && shown.length > 60 ? shown.length - 60 : 0;
+  if (more) shown = shown.slice(0, 60);
   $('exampleTag').hidden = !st.example;
   const box = $('items');
   if (!shown.length){
     box.innerHTML = `<p class="empty">${st.running ? 'Les propositions apparaissent ici au fur et à mesure.' : st.buf ? (st.items.some(it => it.chunks) ? 'Aucune faute trouvée.' : 'Lancez la correction pour voir les propositions.') : 'Déposez un fichier pour commencer.'}</p>`;
-  } else box.innerHTML = shown.map(([it, i]) => renderItem(it, i)).join('');
+  } else box.innerHTML = shown.map(([it, i]) => renderItem(it, i)).join('') + (more ? `<p class="empty">${fmt(more)} autres résultats : précisez la recherche.</p>` : '');
+  $('searchHint').textContent = qv ? `${fmt(shown.length + more)} résultat${shown.length + more > 1 ? 's' : ''}` : '';
   updateCount();
   $('allOn').disabled = $('allOff').disabled = !countChunks();
   updateExport();
@@ -710,6 +745,26 @@ function updateExport(){
 }
 
 $('items').addEventListener('click', e => {
+  const a = e.target.closest('.act');
+  if (a){
+    const i = +a.dataset.i, it = st.items[i], act = a.dataset.act;
+    if (act === 'edit'){ it.editing = true; }
+    else if (act === 'cancel'){ it.editing = false; }
+    else if (act === 'orig'){ const ta = document.getElementById('ed-' + i); if (ta) ta.value = it.text; return; }
+    else if (act === 'save'){
+      const v = document.getElementById('ed-' + i).value.replace(/\r\n?/g, '\n');
+      it.editing = false;
+      if (v !== corrected(it)){
+        it.chunks = v === it.text ? [] : makeChunks(it.text, v).map(c => ({ ...c, src:'M', on:true }));
+        it.reasons = []; it.manual = v !== it.text;
+      }
+    }
+    const art = a.closest('.item'); art.outerHTML = renderItem(it, i);
+    updateCount(); updateExport();
+    const f = act === 'edit' ? document.getElementById('ed-' + i) : document.querySelector(`.act[data-act="edit"][data-i="${i}"]`);
+    if (f) f.focus();
+    return;
+  }
   const b = e.target.closest('.chg'); if (!b) return;
   const i = +b.dataset.i, k = +b.dataset.k, it = st.items[i], c = it.chunks[k];
   c.on = !c.on;
@@ -719,7 +774,9 @@ $('items').addEventListener('click', e => {
   const again = document.querySelector(`.chg[data-i="${i}"][data-k="${k}"]`); if (again) again.focus();
 });
 $('allOn').onclick = () => { st.items.forEach(it => { (it.chunks || []).forEach(c => c.on = false); (it.chunks || []).forEach(c => { if (!it.chunks.some(o => o.on && overlap(o, c))) c.on = true; }); }); render(); };
-$('allOff').onclick = () => { st.items.forEach(it => (it.chunks || []).forEach(c => c.on = false)); render(); };
+let searchT = null;
+$('search').addEventListener('input', () => { clearTimeout(searchT); searchT = setTimeout(render, 150); });
+$('allOff').onclick = () => { st.items.forEach(it => (it.chunks || []).forEach(c => { if (c.src !== 'M') c.on = false; })); render(); };
 document.querySelectorAll('input[name="engine"]').forEach(r => r.addEventListener('change', () => {
   st.engine = r.value; $('typoRow').hidden = st.engine === 'libre';
   $('start').disabled = !canStart();

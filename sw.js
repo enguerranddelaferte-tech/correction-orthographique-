@@ -1,5 +1,5 @@
 /* Hors connexion : tous les fichiers de l'application sont mis en cache à l'installation. */
-const VERSION = 'correcteur-v5';
+const VERSION = 'correcteur-v6';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'jszip.min.js', 'nspell.js', 'spell-worker.js', 'fr.aff', 'fr.dic', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {
