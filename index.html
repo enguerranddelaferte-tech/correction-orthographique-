@@ -1,0 +1,778 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#2445B8">
+<meta name="description" content="Correcteur d'orthographe pour fichiers Word et Excel, hors connexion.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Correcteur Word &amp; Excel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<script src="jszip.min.js"></script>
+</body>
+</html>
+<style>
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0}
+[hidden]{display:none!important}
+/* Layout : une colonne de travail (dépôt → réglages → relecture → export), comme une feuille d'épreuve annotée */
+:root{
+  --paper:#F3F5F8; --sheet:#FFFFFF; --ink:#18212F; --muted:#5B6576; --line:#DCE1E9;
+  --accent:#2445B8; --accent-ink:#FFFFFF; --accent-soft:#E7ECFB;
+  --del:#B8332A; --del-bg:#FBE8E5; --ins:#1B7347; --ins-bg:#E2F3E9; --warn:#8A5A00; --warn-bg:#FFF4D6;
+  --f-display:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-ui:"Figtree", "Segoe UI", system-ui, sans-serif;
+  --f-text:"Source Serif 4", Georgia, "Times New Roman", serif;
+  --f-mono:ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --paper:#11151C; --sheet:#1A2029; --ink:#E5E9EF; --muted:#9AA3B2; --line:#2B3442;
+  --accent:#8FA4FF; --accent-ink:#0E1424; --accent-soft:#232C47;
+  --del:#FF8B7E; --del-bg:#3A201D; --ins:#6CD39E; --ins-bg:#16302A; --warn:#F2C25B; --warn-bg:#352B14; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --paper:#11151C; --sheet:#1A2029; --ink:#E5E9EF; --muted:#9AA3B2; --line:#2B3442;
+  --accent:#8FA4FF; --accent-ink:#0E1424; --accent-soft:#232C47;
+  --del:#FF8B7E; --del-bg:#3A201D; --ins:#6CD39E; --ins-bg:#16302A; --warn:#F2C25B; --warn-bg:#352B14; color-scheme:dark}
+body{background:var(--paper);color:var(--ink);font-family:var(--f-ui);font-size:15px;line-height:1.5}
+.wrap{max-width:860px;margin:0 auto;padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));padding-block:28px 64px;display:flex;flex-direction:column;gap:20px}
+header{display:flex;flex-direction:column;gap:6px}
+h1{font-family:var(--f-display);font-weight:700;font-size:clamp(28px,5vw,40px);line-height:1.05;margin:0;letter-spacing:-.01em;text-wrap:balance}
+h1 .mark{color:var(--del);font-family:var(--f-text);font-weight:600}
+.lede{color:var(--muted);margin:0;max-width:62ch}
+h2{font-family:var(--f-display);font-weight:600;font-size:19px;margin:0}
+.panel{background:var(--sheet);border:1px solid var(--line);border-radius:10px;padding:20px;display:flex;flex-direction:column;gap:16px}
+.drop{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;border:1.5px dashed var(--line);border-radius:8px;padding:28px 16px;cursor:pointer;transition:border-color .15s,background .15s}
+.drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drop strong{font-family:var(--f-display);font-size:17px;font-weight:600}
+.drop span{color:var(--muted);font-size:13.5px}
+.drop:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+#file{position:absolute;opacity:0;width:1px;height:1px}
+.filebar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
+.filename{font-weight:600;word-break:break-all;min-width:0}
+.meta{color:var(--muted);font-size:13.5px;font-variant-numeric:tabular-nums}
+.opts{display:flex;flex-wrap:wrap;gap:10px 22px}
+.opts label{display:flex;gap:8px;align-items:flex-start;font-size:14px;cursor:pointer;max-width:46ch}
+.opts input{margin-top:3px;accent-color:var(--accent)}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+button{font:inherit;cursor:pointer}
+.btn{border:1px solid var(--line);background:var(--sheet);color:var(--ink);padding:9px 15px;border-radius:7px;font-weight:500;font-size:14px}
+.btn:hover:not(:disabled){border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+.btn.primary:hover:not(:disabled){filter:brightness(1.08)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn:focus-visible,.chg:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.notice{padding:10px 14px;border-radius:7px;font-size:14px;background:var(--warn-bg);color:var(--warn)}
+.notice.info{background:var(--accent-soft);color:var(--ink)}
+.progress{display:flex;flex-direction:column;gap:6px}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
+.summary{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:8px 16px}
+.summary .count{font-variant-numeric:tabular-nums;color:var(--muted);font-size:14px}
+.tag{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600;padding:2px 8px;border-radius:99px;background:var(--warn-bg);color:var(--warn)}
+.items{display:flex;flex-direction:column;gap:12px}
+.item{background:var(--sheet);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.item .where{font-family:var(--f-mono);font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.item .txt{font-family:var(--f-text);font-size:16.5px;line-height:1.65;overflow-wrap:anywhere;white-space:pre-wrap}
+.ell{color:var(--muted)}
+.chg{border:0;padding:0 1px;margin:0;background:none;color:inherit;font:inherit;border-radius:3px;line-height:inherit}
+.chg del{color:var(--del);background:var(--del-bg);text-decoration:line-through;text-decoration-thickness:1.5px;padding:0 2px;border-radius:3px}
+.chg ins{color:var(--ins);background:var(--ins-bg);text-decoration:none;padding:0 2px;border-radius:3px;font-weight:600}
+.chg.off .orig{text-decoration:underline dotted var(--muted);text-underline-offset:4px}
+.chg:hover del,.chg:hover ins{filter:brightness(.95)}
+.reasons{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:2px;font-size:13px;color:var(--muted)}
+.reasons b{font-weight:600;color:var(--ink)}
+.empty{color:var(--muted);text-align:center;padding:24px}
+.how{color:var(--muted);font-size:13.5px;margin:0}
+.export .choice{display:flex;flex-direction:column;gap:8px}
+.export label{display:flex;gap:8px;align-items:flex-start;cursor:pointer;font-size:14px}
+.export input{margin-top:3px;accent-color:var(--accent)}
+.status{font-size:14px;min-height:1.4em}
+.engines{border:0;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.engines legend{font-size:12px;letter-spacing:.06em;text-transform:uppercase;font-weight:600;color:var(--muted);padding:0;margin-bottom:8px}
+.eng{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line);border-radius:8px;padding:10px 12px;cursor:pointer;min-width:0}
+.eng:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+.eng:has(input:disabled){opacity:.5;cursor:not-allowed}
+.eng input{margin-top:4px;accent-color:var(--accent)}
+.eng span{display:flex;flex-direction:column;gap:2px;min-width:0}
+.eng small{color:var(--muted);font-size:12.5px;line-height:1.4}
+.eng:focus-within{outline:2px solid var(--accent);outline-offset:1px}
+@media (max-width:640px){.engines{grid-template-columns:1fr}}
+.chg.off ins.sugg{background:transparent;color:var(--muted);font-weight:400;border:1px dashed var(--line);text-decoration:none}
+.alt{color:var(--muted);font-family:var(--f-ui);font-size:12px;margin:0 4px}
+.src{font-family:var(--f-ui);font-size:10px;font-weight:700;letter-spacing:.03em;vertical-align:super;margin-left:1px;padding:0 3px;border-radius:3px}
+.src-C{color:var(--accent);background:var(--accent-soft)}
+.src-L{color:var(--warn);background:var(--warn-bg)}
+.src-LC{color:var(--ins);background:var(--ins-bg)}
+.stats{display:flex;flex-wrap:wrap;gap:8px}
+.stat{display:flex;align-items:baseline;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:13.5px}
+.stat b{font-family:var(--f-display);font-size:20px;font-variant-numeric:tabular-nums}
+.toprow{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px}
+.credit{color:var(--muted);font-size:12.5px;margin:0;text-align:center}
+@media (max-width:480px){.panel{padding:16px}.item .txt{font-size:15.5px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="toprow"><h1>Correcteur <span class="mark">¶</span> Word &amp; Excel</h1><button class="btn" id="install" hidden>Installer l’application</button></div>
+    <p class="lede">Déposez un fichier .docx ou .xlsx. Le correcteur repère les fautes d’orthographe, vous validez les corrections une par une, puis vous récupérez le fichier avec sa mise en forme intacte.</p>
+  </header>
+
+  <section class="panel" aria-labelledby="h-file">
+    <h2 id="h-file">1. Fichier</h2>
+    <label class="drop" id="drop" for="file">
+      <input type="file" id="file" accept=".docx,.xlsx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+      <strong>Glissez votre fichier ici</strong>
+      <span>ou touchez pour choisir · Word (.docx) ou Excel (.xlsx)</span>
+    </label>
+    <div class="filebar" id="filebar" hidden>
+      <span class="filename" id="fname"></span>
+      <span class="meta" id="fmeta"></span>
+    </div>
+    <p class="how">Correcteur libre : moteur Hunspell avec le dictionnaire français Dicollecte. Tout se passe sur votre appareil, même hors connexion ; vos fichiers ne sont envoyés nulle part.</p>
+    <input type="checkbox" id="opt-typo" hidden>
+    <div class="row">
+      <button class="btn primary" id="start" disabled>Lancer la correction</button>
+      <button class="btn" id="stop" hidden>Arrêter</button>
+      <button class="btn" id="retry" hidden>Réessayer</button>
+    </div>
+    <div class="progress" id="progress" hidden>
+      <div class="bar"><i id="barfill"></i></div>
+      <span class="meta" id="ptext"></span>
+    </div>
+    <div class="notice" id="msg" hidden></div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-review">
+    <div class="summary">
+      <h2 id="h-review">2. Relecture <span class="tag" id="exampleTag">Exemple</span></h2>
+      <span class="count" id="count"></span>
+    </div>
+    <div class="stats" id="stats" hidden></div>
+    <p class="how">Chaque correction est acceptée par défaut. Touchez-la pour la refuser, touchez à nouveau pour l'accepter. <span id="legend" hidden>Quand les deux correcteurs proposent des corrections différentes au même endroit, une seule peut être acceptée.</span></p>
+    <div class="row">
+      <button class="btn" id="allOn">Tout accepter</button>
+      <button class="btn" id="allOff">Tout refuser</button>
+    </div>
+    <div class="items" id="items"></div>
+  </section>
+
+  <section class="panel export" aria-labelledby="h-export">
+    <h2 id="h-export">3. Fichier corrigé</h2>
+    <div class="choice" id="wordChoice">
+      <label><input type="radio" name="mode" id="mode-track" value="track" checked> <span><b>Suivi des modifications</b> : les corrections apparaissent dans Word, à accepter ou refuser.</span></label>
+      <label><input type="radio" name="mode" id="mode-direct" value="direct"> <span><b>Corrections appliquées</b> : le texte est directement corrigé.</span></label>
+    </div>
+    <p class="how" id="xlsNote" hidden>Seul le texte des cellules change. Les formules, nombres et mises en forme restent identiques.</p>
+    <div class="row">
+      <button class="btn primary" id="dl" disabled>Télécharger le fichier corrigé</button>
+      <button class="btn" id="report" disabled>Rapport des corrections (.csv)</button>
+    </div>
+    <div class="status meta" id="dlstatus"></div>
+  </section>
+  <p class="credit" id="iosHint" hidden>Sur iPhone ou iPad : touchez Partager, puis « Sur l’écran d’accueil » pour installer.</p>
+  <p class="credit">Correcteur libre : moteur nspell (licence MIT), compatible Hunspell, avec le dictionnaire français Dicollecte (licence MPL 2.0).</p>
+</div>
+
+<script>
+(() => {
+const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const S = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+const XMLNS = 'http://www.w3.org/XML/1998/namespace';
+const R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
+const AUTHOR = 'Correcteur';
+const BATCH_CHARS = 7000, BATCH_ITEMS = 60, POOL = 2;
+
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = n => n.toLocaleString('fr-FR');
+
+let sample = null, downloads = null;
+const st = { buf:null, name:'', kind:null, items:[], example:true, failed:[], running:false, stopped:false, ctls:new Set(), engine:'libre', resultEngine:null };
+
+/* ---------- Lecture des fichiers ---------- */
+const parseXml = s => new DOMParser().parseFromString(s, 'application/xml');
+const declOf = s => (s.match(/^\s*<\?xml[^?]*\?>/) || ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'])[0].trim();
+const letters = t => (t.match(/\p{L}/gu) || []).length >= 2;
+
+function inFallback(el){ for (let p = el.parentNode; p && p.nodeType === 1; p = p.parentNode) if (p.localName === 'Fallback' && p.namespaceURI === MC) return true; return false; }
+
+function collectW(el, segs){
+  for (const c of el.childNodes){
+    if (c.nodeType !== 1) continue;
+    const ln = c.localName;
+    if (c.namespaceURI === W){
+      if (['p','txbxContent','del','moveFrom','pPr','rPr','instrText','delText'].includes(ln)) continue;
+      if (ln === 't'){ segs.push({ t:c, text:c.textContent }); continue; }
+      if (ln === 'tab'){ segs.push({ t:null, text:'\t' }); continue; }
+      if (ln === 'br' || ln === 'cr'){ segs.push({ t:null, text:'\n' }); continue; }
+    }
+    if (ln === 'Fallback' && c.namespaceURI === MC) continue;
+    collectW(c, segs);
+  }
+}
+
+async function extract(zip, kind){
+  const parts = {}, items = [];
+  if (kind === 'docx'){
+    const names = Object.keys(zip.files).filter(p => /^word\/(document|header\d*|footer\d*|footnotes|endnotes)\.xml$/.test(p));
+    const rank = p => p.includes('document') ? 0 : p.includes('header') ? 1 : p.includes('footer') ? 2 : 3;
+    names.sort((a,b) => rank(a) - rank(b) || a.localeCompare(b));
+    for (const path of names){
+      const str = await zip.file(path).async('string');
+      const doc = parseXml(str); parts[path] = { doc, decl:declOf(str), dirty:false };
+      const base = path.includes('document') ? 'Texte' : path.includes('header') ? 'En-tête' : path.includes('footer') ? 'Pied de page' : path.includes('footnotes') ? 'Note de bas de page' : 'Note de fin';
+      const ps = doc.getElementsByTagNameNS(W, 'p'); let n = 0;
+      for (let i = 0; i < ps.length; i++){
+        const p = ps[i]; if (inFallback(p)) continue;
+        const segs = []; collectW(p, segs);
+        const text = segs.map(s => s.text).join('');
+        if (!segs.some(s => s.t)) continue;
+        n++;
+        if (!letters(text)) continue;
+        items.push({ id:'w' + items.length, label:`${base} · paragraphe ${n}`, segs, text, path });
+      }
+    }
+  } else {
+    const wbStr = await zip.file('xl/workbook.xml').async('string');
+    const wb = parseXml(wbStr);
+    const relsFile = zip.file('xl/_rels/workbook.xml.rels');
+    const rels = relsFile ? parseXml(await relsFile.async('string')) : null;
+    const relMap = {};
+    if (rels) for (const r of rels.getElementsByTagName('Relationship')) relMap[r.getAttribute('Id')] = r.getAttribute('Target');
+    const first = {}; let ord = 0;
+    const inline = [];
+    for (const sh of wb.getElementsByTagNameNS(S, 'sheet')){
+      const name = sh.getAttribute('name');
+      const tgt = relMap[sh.getAttributeNS(R_NS, 'id')]; if (!tgt) continue;
+      const path = tgt.startsWith('/') ? tgt.slice(1) : 'xl/' + tgt.replace(/^\.\//,'');
+      const f = zip.file(path); if (!f) continue;
+      const str = await f.async('string'); const doc = parseXml(str);
+      parts[path] = { doc, decl:declOf(str), dirty:false };
+      for (const c of doc.getElementsByTagNameNS(S, 'c')){
+        const t = c.getAttribute('t'), ref = c.getAttribute('r') || '';
+        if (t === 's'){
+          const v = c.getElementsByTagNameNS(S, 'v')[0]; if (!v) continue;
+          const idx = +v.textContent;
+          if (!first[idx]) first[idx] = { label:`${name} · ${ref}`, count:0, ord:ord++ };
+          first[idx].count++;
+        } else if (t === 'inlineStr'){
+          const is = c.getElementsByTagNameNS(S, 'is')[0]; if (!is) continue;
+          const segs = collectS(is); const text = segs.map(s => s.text).join('');
+          if (letters(text)) inline.push({ label:`${name} · ${ref}`, segs, text, path, ord:ord++ });
+        }
+      }
+    }
+    const ssf = zip.file('xl/sharedStrings.xml');
+    const shared = [];
+    if (ssf){
+      const str = await ssf.async('string'); const doc = parseXml(str);
+      parts['xl/sharedStrings.xml'] = { doc, decl:declOf(str), dirty:false };
+      const sis = doc.getElementsByTagNameNS(S, 'si');
+      for (let i = 0; i < sis.length; i++){
+        const info = first[i]; if (!info) continue;
+        const segs = collectS(sis[i]); const text = segs.map(s => s.text).join('');
+        if (!letters(text)) continue;
+        shared.push({ label: info.label + (info.count > 1 ? ` (+${info.count - 1} cellule${info.count > 2 ? 's' : ''})` : ''), segs, text, path:'xl/sharedStrings.xml', ord:info.ord });
+      }
+    }
+    [...shared, ...inline].sort((a,b) => a.ord - b.ord).forEach((it, k) => { it.id = 'x' + k; items.push(it); });
+  }
+  return { parts, items };
+}
+function collectS(si){
+  const segs = [];
+  for (const c of si.childNodes){
+    if (c.nodeType !== 1) continue;
+    if (c.localName === 't') segs.push({ t:c, text:c.textContent });
+    else if (c.localName === 'r'){ const t = c.getElementsByTagNameNS(S, 't')[0]; if (t) segs.push({ t, text:t.textContent }); }
+  }
+  return segs;
+}
+
+/* ---------- Différences mot à mot ---------- */
+const tokenize = s => s.match(/[\p{L}\p{M}\p{N}]+(?:['’][\p{L}\p{M}\p{N}]+)*|\s|[^\s]/gsu) || [];
+function diffTokens(a, b){
+  let s = 0; while (s < a.length && s < b.length && a[s] === b[s]) s++;
+  let e = 0; while (e < a.length - s && e < b.length - s && a[a.length-1-e] === b[b.length-1-e]) e++;
+  const A = a.slice(s, a.length - e), B = b.slice(s, b.length - e), n = A.length, m = B.length;
+  const ops = a.slice(0, s).map(t => ['eq', t]);
+  if (n * m > 4e6){ A.forEach(t => ops.push(['del', t])); B.forEach(t => ops.push(['ins', t])); }
+  else {
+    const dp = new Uint32Array((n+1)*(m+1)), W1 = m + 1;
+    for (let i = n-1; i >= 0; i--) for (let j = m-1; j >= 0; j--)
+      dp[i*W1+j] = A[i] === B[j] ? dp[(i+1)*W1+j+1] + 1 : Math.max(dp[(i+1)*W1+j], dp[i*W1+j+1]);
+    let i = 0, j = 0;
+    while (i < n && j < m){
+      if (A[i] === B[j]){ ops.push(['eq', A[i]]); i++; j++; }
+      else if (dp[(i+1)*W1+j] >= dp[i*W1+j+1]) ops.push(['del', A[i++]]);
+      else ops.push(['ins', B[j++]]);
+    }
+    while (i < n) ops.push(['del', A[i++]]);
+    while (j < m) ops.push(['ins', B[j++]]);
+  }
+  a.slice(a.length - e).forEach(t => ops.push(['eq', t]));
+  return ops;
+}
+function makeChunks(orig, corr){
+  const ops = diffTokens(tokenize(orig), tokenize(corr));
+  const chunks = []; let pos = 0, cur = null;
+  for (const [op, t] of ops){
+    if (op === 'eq'){ if (cur){ chunks.push(cur); cur = null; } pos += t.length; continue; }
+    if (!cur) cur = { start:pos, del:'', ins:'', on:true };
+    if (op === 'del'){ cur.del += t; pos += t.length; } else cur.ins += t;
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
+
+/* ---------- Application aux segments (runs) ---------- */
+function buildPieces(item, chunks){
+  const L = item.text.length, own = new Int32Array(L); let p = 0;
+  item.segs.forEach((s, k) => { for (let i = 0; i < s.text.length; i++) own[p++] = k; });
+  const editable = k => k >= 0 && item.segs[k] && item.segs[k].t;
+  const near = i => { if (!L) return -1; i = Math.min(Math.max(i, 0), L - 1);
+    for (let d = 0; d < L; d++) for (const j of [i-d, i+d]) if (j >= 0 && j < L && editable(own[j])) return own[j]; return -1; };
+  const P = item.segs.map(() => []);
+  const push = (k, kind, text) => { if (!editable(k) || !text) return; const a = P[k], last = a[a.length-1];
+    if (last && last.kind === kind) last.text += text; else a.push({ kind, text }); };
+  const at = new Map(); chunks.forEach(c => { if (c.on) at.set(c.start, c); });
+  let i = 0;
+  while (i <= L){
+    const c = at.get(i);
+    if (c && c.del.length){
+      const tgt = editable(own[i]) ? own[i] : near(i);
+      for (let k = 0; k < c.del.length; k++) push(own[i+k], 'del', item.text[i+k]);
+      push(tgt, 'ins', c.ins); at.delete(i); i += c.del.length; continue;
+    }
+    if (c){ const tgt = i > 0 && editable(own[i-1]) ? own[i-1] : near(i === L ? L-1 : i); push(tgt, 'ins', c.ins); at.delete(i); }
+    if (i >= L) break;
+    push(own[i], 'keep', item.text[i]); i++;
+  }
+  return P;
+}
+function setText(t, text){
+  t.textContent = text;
+  if (/^\s|\s$/.test(text)) t.setAttributeNS(XMLNS, 'xml:space', 'preserve');
+}
+function splitRun(t, pieces, ctx){
+  const r = t.parentNode, doc = t.ownerDocument;
+  if (!r || r.localName !== 'r' || ['ins','moveTo'].includes(r.parentNode.localName)){
+    setText(t, pieces.filter(p => p.kind !== 'del').map(p => p.text).join('')); return;
+  }
+  const rPr = [...r.childNodes].find(n => n.nodeType === 1 && n.localName === 'rPr');
+  const mkRun = () => { const nr = doc.createElementNS(W, 'w:r'); if (rPr) nr.appendChild(rPr.cloneNode(true)); return nr; };
+  const mkT = (tag, text) => { const e = doc.createElementNS(W, tag); e.textContent = text; e.setAttributeNS(XMLNS, 'xml:space', 'preserve'); return e; };
+  const before = mkRun(), after = mkRun(); let seen = false;
+  for (const c of [...r.childNodes]){ if (c === rPr) continue; if (c === t){ seen = true; continue; } (seen ? after : before).appendChild(c); }
+  const base = rPr ? 1 : 0, out = [];
+  if (before.childNodes.length > base) out.push(before);
+  for (const p of pieces){
+    if (!p.text) continue;
+    if (p.kind === 'keep'){ const nr = mkRun(); nr.appendChild(mkT('w:t', p.text)); out.push(nr); continue; }
+    const w = doc.createElementNS(W, p.kind === 'del' ? 'w:del' : 'w:ins');
+    w.setAttributeNS(W, 'w:id', String(ctx.id++)); w.setAttributeNS(W, 'w:author', AUTHOR); w.setAttributeNS(W, 'w:date', ctx.date);
+    const nr = mkRun(); nr.appendChild(mkT(p.kind === 'del' ? 'w:delText' : 'w:t', p.text)); w.appendChild(nr); out.push(w);
+  }
+  if (after.childNodes.length > base) out.push(after);
+  for (const o of out) r.parentNode.insertBefore(o, r);
+  r.parentNode.removeChild(r);
+}
+
+/* ---------- Correcteur libre (Hunspell dans un worker) ---------- */
+let worker = null, workerReady = null, seq = 0;
+const pending = new Map();
+function initWorker(){
+  if (workerReady) return workerReady;
+  workerReady = new Promise((resolve, reject) => {
+    try { worker = new Worker('spell-worker.js'); }
+    catch (err){ reject(err); return; }
+    worker.onmessage = e => {
+      const m = e.data;
+      if (m.type === 'ready') resolve();
+      else if (m.type === 'error') reject(new Error(m.message));
+      else if (m.type === 'result'){ const p = pending.get(m.seq); pending.delete(m.seq); if (p) p(m.results); }
+    };
+    worker.onerror = e => reject(new Error(e.message || 'worker'));
+    worker.postMessage({ type:'init', aff:'fr.aff', dic:'fr.dic' });
+  });
+  workerReady.catch(() => { workerReady = null; worker = null; });
+  return workerReady;
+}
+function checkLibre(items){
+  return new Promise(res => { const s = ++seq; pending.set(s, res); worker.postMessage({ type:'check', seq:s, items:items.map(it => ({ id:it.id, text:it.text })) }); });
+}
+async function runLibre(items){
+  $('progress').hidden = false; $('barfill').style.width = '0%';
+  $('ptext').textContent = 'Chargement du dictionnaire libre (quelques secondes)…';
+  try { await initWorker(); }
+  catch (err){ showMsg('Le correcteur libre n’a pas pu démarrer dans ce navigateur. Essayez avec un navigateur à jour (Chrome, Edge, Safari ou Firefox).'); return false; }
+  const byId = new Map(items.map(it => [it.id, it]));
+  const SIZE = 150;
+  for (let i = 0; i < items.length && !st.stopped; i += SIZE){
+    const res = await checkLibre(items.slice(i, i + SIZE));
+    for (const r of res){ const it = byId.get(r.id); if (!it) continue; it.lib = r.text; it.libFixes = r.fixes; merge(it); }
+    const done = Math.min(i + SIZE, items.length);
+    $('barfill').style.width = Math.round(done / items.length * 100) + '%';
+    $('ptext').textContent = `Correcteur libre : ${fmt(done)} sur ${fmt(items.length)} passages`;
+    render();
+  }
+  return !st.stopped;
+}
+
+/* ---------- Fusion des propositions ---------- */
+const endOf = c => c.start + c.del.length;
+function overlap(a, b){
+  if (a === b) return false;
+  if (a.start === b.start) return true;
+  if (!a.del.length && !b.del.length) return false;
+  if (!a.del.length) return a.start > b.start && a.start < endOf(b);
+  if (!b.del.length) return b.start > a.start && b.start < endOf(a);
+  return a.start < endOf(b) && b.start < endOf(a);
+}
+function merge(it){
+  const L = it.lib != null && it.lib !== it.text ? makeChunks(it.text, it.lib).map(c => ({ ...c, src:'L' })) : [];
+  const C = it.cl != null && it.cl !== it.text ? makeChunks(it.text, it.cl).map(c => ({ ...c, src:'C' })) : [];
+  for (const c of C){
+    const k = L.findIndex(l => l.start === c.start && l.del === c.del && l.ins === c.ins);
+    if (k >= 0){ c.src = 'LC'; L.splice(k, 1); }
+  }
+  const all = [...C, ...L];
+  all.forEach(c => c.on = false);
+  for (const c of all) if (!all.some(o => o.on && overlap(o, c))) c.on = true;   // Claude d'abord, puis le libre là où il ne se chevauche pas
+  all.sort((a, b) => a.start - b.start);
+  it.chunks = all;
+  const reasons = (it.clReasons || []).map(r => ({ ...r, src:'C' }));
+  for (const f of it.libFixes || []){
+    const same = reasons.find(r => r.avant === f.avant && r.apres === f.apres);
+    if (same) same.src = 'LC';
+    else reasons.push({ avant:f.avant, apres:f.apres, raison:'mot absent du dictionnaire', src:'L' });
+  }
+  it.reasons = reasons;
+}
+
+/* ---------- Appels à Claude ---------- */
+function promptFor(batch, typo){
+  return `Tu es correcteur professionnel. Corrige UNIQUEMENT les fautes d'orthographe, de grammaire, de conjugaison, d'accord et de ponctuation évidente dans chacun des textes ci-dessous (extraits d'un fichier ${st.kind === 'xlsx' ? 'Excel' : 'Word'}).
+
+Règles :
+- Ne reformule pas, ne change ni le style, ni le registre, ni le vocabulaire, ni le sens.
+- Ne touche pas aux noms propres, marques, sigles, codes, références, URL, adresses e-mail, nombres et dates.
+- Conserve exactement les tabulations (\\t), retours à la ligne (\\n) et espaces de début et de fin.
+- Si un texte est dans une autre langue que le français, corrige-le dans sa propre langue.
+- ${typo ? "Applique aussi la typographie française : espace insécable avant ; : ! ? et à l'intérieur des guillemets « », apostrophe typographique ’." : "Ne modifie pas la typographie (guillemets, apostrophes, espaces insécables)."}
+- Si un texte est déjà correct, ne le renvoie pas.
+
+Réponds uniquement avec ce JSON :
+{"corrections":[{"id":"…","texte":"texte complet corrigé","explications":[{"avant":"mot ou groupe fautif","apres":"correction","raison":"règle en quelques mots"}]}]}
+Si aucun texte n'a de faute : {"corrections":[]}
+
+Textes à corriger (JSON) :
+${JSON.stringify(batch.map(it => ({ id:it.id, texte:it.text })))}`;
+}
+function makeBatches(items){
+  const out = []; let cur = [], size = 0;
+  for (const it of items){
+    if (cur.length && (size + it.text.length > BATCH_CHARS || cur.length >= BATCH_ITEMS)){ out.push(cur); cur = []; size = 0; }
+    cur.push(it); size += it.text.length;
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+const ERR = {
+  not_granted:"L'accès à Claude n'a pas été autorisé. Rouvrez la page et acceptez l'accès pour utiliser Claude.",
+  sampling_disabled:"Claude n'est pas disponible pour ce compte.",
+  rate_limited:"La limite d'utilisation de Claude est atteinte pour le moment. Réessayez dans quelques minutes avec « Relancer les lots en échec ».",
+  session_expired:"Votre session a expiré. Reconnectez-vous à Claude puis relancez.",
+};
+const FATAL = new Set(['not_granted','sampling_disabled','not_declared','capability_disabled','capability_removed','session_expired','rate_limited']);
+
+async function runClaude(batches){
+  st.failed = [];
+  const typo = $('opt-typo').checked;
+  let done = 0, stop = null;
+  const total = batches.length;
+  const prog = () => { $('progress').hidden = false; $('barfill').style.width = Math.round(done / total * 100) + '%';
+    $('ptext').textContent = `Claude : lot ${Math.min(done + 1, total)} sur ${total} · ${Math.round(done / total * 100)} %`; };
+  prog();
+  const queue = [...batches];
+  async function worker(){
+    while (queue.length && !stop && !st.stopped){
+      const batch = queue.shift();
+      const ctl = new AbortController(); st.ctls.add(ctl);
+      try {
+        const res = await sample.json(promptFor(batch, typo), { signal:ctl.signal, modelTier:'default' });
+        applyResult(batch, res);
+      } catch (e){
+        if (e && FATAL.has(e.code)) stop = stop || e.code;
+        st.failed.push(batch);
+      } finally { st.ctls.delete(ctl); }
+      done++; prog(); render();
+    }
+  }
+  await Promise.all(Array.from({ length:Math.min(POOL, batches.length) }, worker));
+  st.failed.push(...queue);
+  return { stop, total };
+}
+function applyResult(batch, res){
+  const list = res && Array.isArray(res.corrections) ? res.corrections : [];
+  const byId = new Map(batch.map(it => [it.id, it]));
+  batch.forEach(it => { it.cl = it.text; it.clReasons = []; });
+  for (const c of list){
+    const it = byId.get(String(c && c.id)); if (!it || typeof c.texte !== 'string') continue;
+    it.cl = c.texte;
+    it.clReasons = Array.isArray(c.explications) ? c.explications.filter(x => x && x.raison).map(x => ({ avant:String(x.avant || ''), apres:String(x.apres || ''), raison:String(x.raison) })) : [];
+  }
+  batch.forEach(merge);
+}
+
+async function run(batchesOverride){
+  const engine = batchesOverride ? 'claude-retry' : st.engine;
+  st.running = true; st.stopped = false; setRunning(true); showMsg('');
+  let claudeOut = null;
+  if (engine === 'libre' || engine === 'compare'){
+    const ok = await runLibre(st.items);
+    if (!ok && !st.stopped){ st.running = false; setRunning(false); render(); return; }
+  }
+  if (!st.stopped && (engine === 'claude' || engine === 'compare' || engine === 'claude-retry')){
+    claudeOut = await runClaude(batchesOverride || makeBatches(st.items));
+  }
+  st.running = false; setRunning(false);
+  const n = st.failed.length;
+  if (claudeOut && claudeOut.stop && ERR[claudeOut.stop]) showMsg(ERR[claudeOut.stop]);
+  else if (n) showMsg(`${n} lot${n > 1 ? 's n’ont' : ' n’a'} pas pu être traité${n > 1 ? 's' : ''} par Claude. Le reste est prêt ; vous pouvez relancer les lots en échec.`);
+  else if (st.stopped) showMsg('Correction arrêtée. Les propositions déjà reçues restent disponibles.', 'info');
+  else if (!countChunks()) showMsg('Aucune faute trouvée dans ce fichier.', 'info');
+  $('retry').hidden = !n;
+  if (!st.stopped && !n) $('ptext').textContent = 'Relecture terminée';
+  render();
+}
+
+/* ---------- Interface ---------- */
+function showMsg(text, kind){ const m = $('msg'); m.hidden = !text; m.textContent = text || ''; m.className = 'notice' + (kind === 'info' ? ' info' : ''); }
+function needsClaude(){ return st.engine !== 'libre'; }
+function canStart(){ return !st.running && !!st.buf && st.items.length > 0 && (!needsClaude() || !!sample); }
+function setRunning(on){
+  $('stop').hidden = !on; $('start').disabled = !canStart();
+  $('retry').hidden = true; $('file').disabled = on;
+  document.querySelectorAll('input[name="engine"]').forEach(r => r.disabled = on || (r.value !== 'libre' && !sample));
+  updateExport();
+}
+const countChunks = () => st.items.reduce((n, it) => n + (it.chunks ? it.chunks.length : 0), 0);
+const countOn = () => st.items.reduce((n, it) => n + (it.chunks ? it.chunks.filter(c => c.on).length : 0), 0);
+const SRC = { C:'Claude', L:'Libre', LC:'Les deux' };
+const SRCSHORT = { C:'C', L:'L', LC:'C+L' };
+
+function vis(s){ return esc(s).replace(/\t/g, '<span class="ell">→</span>\t').replace(/\n/g, '<span class="ell">↵</span>\n'); }
+function wsMark(s){ return s.trim() ? vis(s) : '<span title="espace">␣</span>'; }
+function chunkHtml(it, c, idx, k, badges){
+  const label = (badges ? SRC[c.src] + ' · ' : '') + (c.on ? 'correction acceptée, toucher pour refuser' : 'correction refusée, toucher pour accepter');
+  const inner = c.on
+    ? (c.del ? `<del>${wsMark(c.del)}</del>` : '') + (c.ins ? `<ins>${wsMark(c.ins)}</ins>` : '')
+    : (c.del ? `<span class="orig">${vis(c.del)}</span>` : '') + (c.ins ? `<ins class="sugg">${wsMark(c.ins)}</ins>` : '');
+  const badge = badges ? `<span class="src src-${c.src}">${SRCSHORT[c.src]}</span>` : '';
+  return `<button class="chg${c.on ? '' : ' off'}" data-i="${idx}" data-k="${k}" aria-pressed="${c.on}" title="${label}" aria-label="${esc(c.del || '∅')} vers ${esc(c.ins || '∅')}, ${label}">${inner}${badge}</button>`;
+}
+function renderItem(it, idx){
+  const badges = st.resultEngine === 'compare';
+  const order = it.chunks.map((c, k) => [c, k]);
+  const clusters = [];
+  for (const pair of order){
+    const cl = clusters[clusters.length - 1];
+    if (cl && cl.some(([o]) => overlap(o, pair[0]))) cl.push(pair); else clusters.push([pair]);
+  }
+  const ctx = (s, where) => {
+    if (s.length <= 140) return vis(s);
+    if (where === 'start') return '<span class="ell">… </span>' + vis(s.slice(-60));
+    if (where === 'end') return vis(s.slice(0, 60)) + '<span class="ell"> …</span>';
+    return vis(s.slice(0, 60)) + '<span class="ell"> … </span>' + vis(s.slice(-60));
+  };
+  const parts = []; let pos = 0;
+  clusters.forEach((cl, n) => {
+    const start = Math.min(...cl.map(([c]) => c.start)), end = Math.max(...cl.map(([c]) => endOf(c)));
+    parts.push(ctx(it.text.slice(pos, start), n === 0 ? 'start' : 'mid'));
+    parts.push(cl.map(([c, k]) => chunkHtml(it, c, idx, k, badges)).join('<span class="alt">ou</span>'));
+    pos = Math.max(pos, end);
+  });
+  parts.push(ctx(it.text.slice(pos), 'end'));
+  const n = it.chunks.length;
+  const reasons = (it.reasons || []).map(r => `<li>${badges ? `<span class="src src-${r.src}">${SRCSHORT[r.src]}</span> ` : ''}<b>${esc(r.avant || '∅')} → ${esc(r.apres || '∅')}</b> · ${esc(r.raison)}</li>`).join('');
+  return `<article class="item"><div class="where"><span>${esc(it.label)}</span><span>${n} proposition${n > 1 ? 's' : ''}</span></div><div class="txt">${parts.join('')}</div>${reasons ? `<ul class="reasons">${reasons}</ul>` : ''}</article>`;
+}
+function updateCount(){
+  const total = countChunks(), on = countOn(), shown = st.items.filter(it => it.chunks && it.chunks.length).length;
+  $('count').textContent = total ? `${fmt(total)} proposition${total > 1 ? 's' : ''} dans ${fmt(shown)} passage${shown > 1 ? 's' : ''} · ${fmt(on)} acceptée${on > 1 ? 's' : ''}` : '';
+  const cmp = st.resultEngine === 'compare' && total;
+  $('stats').hidden = !cmp; $('legend').hidden = !cmp;
+  if (cmp){
+    const c = { LC:0, C:0, L:0 };
+    st.items.forEach(it => (it.chunks || []).forEach(ch => c[ch.src]++));
+    $('stats').innerHTML = [['LC','Trouvées par les deux'],['C','Claude seul'],['L','Libre seul']]
+      .map(([k, t]) => `<div class="stat"><span class="src src-${k}">${SRCSHORT[k]}</span><b>${fmt(c[k])}</b><span>${t}</span></div>`).join('');
+  }
+}
+function render(){
+  const shown = st.items.map((it, i) => [it, i]).filter(([it]) => it.chunks && it.chunks.length);
+  $('exampleTag').hidden = !st.example;
+  const box = $('items');
+  if (!shown.length){
+    box.innerHTML = `<p class="empty">${st.running ? 'Les propositions apparaissent ici au fur et à mesure.' : st.buf ? (st.items.some(it => it.chunks) ? 'Aucune faute trouvée.' : 'Lancez la correction pour voir les propositions.') : 'Déposez un fichier pour commencer.'}</p>`;
+  } else box.innerHTML = shown.map(([it, i]) => renderItem(it, i)).join('');
+  updateCount();
+  $('allOn').disabled = $('allOff').disabled = !countChunks();
+  updateExport();
+}
+function updateExport(){
+  const ready = !st.example && st.buf && !st.running && st.items.some(it => it.chunks);
+  $('dl').disabled = !ready || !downloads;
+  $('report').disabled = !ready || !downloads || !countChunks();
+  $('wordChoice').hidden = st.kind === 'xlsx';
+  $('xlsNote').hidden = st.kind !== 'xlsx';
+}
+
+$('items').addEventListener('click', e => {
+  const b = e.target.closest('.chg'); if (!b) return;
+  const i = +b.dataset.i, k = +b.dataset.k, it = st.items[i], c = it.chunks[k];
+  c.on = !c.on;
+  if (c.on) it.chunks.forEach(o => { if (overlap(o, c)) o.on = false; });
+  b.closest('.item').outerHTML = renderItem(it, i);
+  updateCount(); updateExport();
+  const again = document.querySelector(`.chg[data-i="${i}"][data-k="${k}"]`); if (again) again.focus();
+});
+$('allOn').onclick = () => { st.items.forEach(it => { (it.chunks || []).forEach(c => c.on = false); (it.chunks || []).forEach(c => { if (!it.chunks.some(o => o.on && overlap(o, c))) c.on = true; }); }); render(); };
+$('allOff').onclick = () => { st.items.forEach(it => (it.chunks || []).forEach(c => c.on = false)); render(); };
+document.querySelectorAll('input[name="engine"]').forEach(r => r.addEventListener('change', () => {
+  st.engine = r.value; $('typoRow').hidden = st.engine === 'libre';
+  $('start').disabled = !canStart();
+  if (st.engine !== 'libre' && !sample) showMsg('Claude n’est pas disponible dans cette vue. Le correcteur libre fonctionne quand même.');
+}));
+
+async function loadFile(file){
+  showMsg('');
+  const ext = (file.name.match(/\.([^.]+)$/) || [,''])[1].toLowerCase();
+  if (ext === 'doc' || ext === 'xls'){ showMsg(`Les anciens formats .${ext} ne sont pas pris en charge. Ouvrez le fichier dans ${ext === 'doc' ? 'Word' : 'Excel'} et enregistrez-le en .${ext}x, puis déposez-le ici.`); return; }
+  if (ext !== 'docx' && ext !== 'xlsx'){ showMsg('Ce format n’est pas pris en charge. Déposez un fichier .docx ou .xlsx.'); return; }
+  try {
+    const buf = await file.arrayBuffer();
+    const zip = await JSZip.loadAsync(buf);
+    const { items } = await extract(zip, ext);
+    Object.assign(st, { buf, name:file.name, kind:ext, items, example:false, failed:[], resultEngine:null });
+    const chars = items.reduce((n, it) => n + it.text.length, 0);
+    $('filebar').hidden = false; $('fname').textContent = file.name;
+    $('fmeta').textContent = items.length
+      ? `${fmt(items.length)} ${ext === 'docx' ? 'paragraphe' : 'cellule'}${items.length > 1 ? 's' : ''} de texte · ${fmt(chars)} signes`
+      : 'Aucun texte à corriger dans ce fichier';
+    $('progress').hidden = true; $('retry').hidden = true;
+    $('start').disabled = !canStart();
+    $('dlstatus').textContent = '';
+    render();
+  } catch (err){
+    showMsg('Ce fichier ne peut pas être lu. Vérifiez qu’il n’est pas protégé par un mot de passe ou endommagé.');
+  }
+}
+$('file').addEventListener('change', e => { const f = e.target.files[0]; if (f) loadFile(f); e.target.value = ''; });
+const drop = $('drop');
+['dragenter','dragover'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f && !st.running) loadFile(f); });
+
+$('start').onclick = () => {
+  if (!canStart()) return;
+  st.items.forEach(it => { it.chunks = null; it.reasons = []; it.lib = null; it.libFixes = []; it.cl = null; it.clReasons = []; });
+  st.resultEngine = st.engine;
+  render(); run();
+};
+$('retry').onclick = () => { const b = st.failed; st.failed = []; run(b); };
+$('stop').onclick = () => { st.stopped = true; st.ctls.forEach(c => c.abort()); };
+
+/* ---------- Export ---------- */
+async function buildOutput(){
+  const zip = await JSZip.loadAsync(st.buf);
+  const { parts, items } = await extract(zip, st.kind);
+  const fresh = new Map(items.map(it => [it.id, it]));
+  const track = st.kind === 'docx' && $('mode-track').checked;
+  const ctx = { id:900000 + Math.floor(Math.random() * 50000), date:new Date().toISOString().replace(/\.\d+Z$/, 'Z') };
+  let applied = 0;
+  for (const rev of st.items){
+    if (!rev.chunks || !rev.chunks.some(c => c.on)) continue;
+    const f = fresh.get(rev.id); if (!f || f.text !== rev.text) continue;
+    const P = buildPieces(f, rev.chunks);
+    f.segs.forEach((s, k) => {
+      if (!s.t || !P[k].some(p => p.kind !== 'keep')) return;
+      if (track) splitRun(s.t, P[k], ctx);
+      else setText(s.t, P[k].filter(p => p.kind !== 'del').map(p => p.text).join(''));
+    });
+    parts[f.path].dirty = true;
+    applied += rev.chunks.filter(c => c.on).length;
+  }
+  const ser = new XMLSerializer();
+  for (const [path, p] of Object.entries(parts)) if (p.dirty) zip.file(path, p.decl + ser.serializeToString(p.doc).replace(/^<\?xml[^?]*\?>\s*/, ''));
+  const blob = await zip.generateAsync({ type:'blob', compression:'DEFLATE' });
+  return { blob, applied };
+}
+const baseName = () => st.name.replace(/\.(docx|xlsx)$/i, '');
+$('dl').onclick = async () => {
+  $('dl').disabled = true; $('dlstatus').textContent = 'Préparation du fichier…';
+  try {
+    const { blob, applied } = await buildOutput();
+    await downloads.save({ filename:`${baseName()} (corrigé).${st.kind}`, data:blob });
+    $('dlstatus').textContent = `Fichier enregistré avec ${fmt(applied)} correction${applied > 1 ? 's' : ''}.`;
+  } catch (e){
+    const c = e && e.code;
+    $('dlstatus').textContent = c === 'declined' ? 'Enregistrement annulé.' : c === 'rate_limited' ? 'Une demande d’enregistrement est déjà ouverte.' : 'Le fichier n’a pas pu être enregistré. Réessayez.';
+  } finally { updateExport(); }
+};
+$('report').onclick = async () => {
+  const q = s => '"' + String(s).replace(/"/g, '""').replace(/\t/g, ' ').replace(/\n/g, ' ') + '"';
+  const rows = [['Emplacement','Avant','Après','Proposé par','Statut'].map(q).join(';')];
+  for (const it of st.items) for (const c of it.chunks || []) rows.push([it.label, c.del, c.ins, SRC[c.src], c.on ? 'Acceptée' : 'Refusée'].map(q).join(';'));
+  try {
+    await downloads.save({ filename:`${baseName()} - corrections.csv`, data:'﻿' + rows.join('\r\n') });
+    $('dlstatus').textContent = 'Rapport enregistré.';
+  } catch (e){ $('dlstatus').textContent = e && e.code === 'declined' ? 'Enregistrement annulé.' : 'Le rapport n’a pas pu être enregistré.'; }
+};
+
+/* ---------- Exemple affiché au chargement ---------- */
+const EX = [
+  ['Texte · paragraphe 3', 'Le rapport final sera transmis à la direction génerale avant vendredi.', 'Le rapport final sera transmis à la direction générale avant vendredi.'],
+  ['Feuil1 · B7', 'Réparation à prévoir sur le vehicule, voir l’acceuil.', 'Réparation à prévoir sur le véhicule, voir l’accueil.'],
+  ['Pied de page · paragraphe 1', 'Ce document est confidentiel, merci de ne pas le diffuser sans autorisaton.', 'Ce document est confidentiel, merci de ne pas le diffuser sans autorisation.'],
+];
+st.items = EX.map(([label, text, lib], k) => {
+  const it = { id:'e' + k, label, text, segs:[{ t:null, text }], lib, cl:null, clReasons:[],
+    libFixes:makeChunks(text, lib).map(c => ({ avant:c.del, apres:c.ins })) };
+  merge(it); return it;
+});
+st.engine = 'libre'; st.resultEngine = 'libre';
+render();
+
+/* ---------- Application installable ---------- */
+downloads = { save: ({ filename, data }) => {
+  const blob = data instanceof Blob ? data : new Blob([data], { type:'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob), a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  return Promise.resolve({ status:'saved' });
+} };
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; $('install').hidden = false; });
+window.addEventListener('appinstalled', () => { $('install').hidden = true; });
+$('install').onclick = async () => { if (!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; $('install').hidden = true; };
+const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+if (/iphone|ipad|ipod/i.test(navigator.userAgent) && !standalone) $('iosHint').hidden = false;
+if (window.Worker) initWorker().catch(() => {});
+if ('launchQueue' in window) launchQueue.setConsumer(async params => { if (params.files && params.files.length){ const f = await params.files[0].getFile(); loadFile(f); } });
+setRunning(false);
+})();
+</script>
+</body>
+</html>
