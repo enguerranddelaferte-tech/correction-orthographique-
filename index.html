@@ -112,6 +112,14 @@ button{font:inherit;cursor:pointer}
 .stat{display:flex;align-items:baseline;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:13.5px}
 .stat b{font-family:var(--f-display);font-size:20px;font-variant-numeric:tabular-nums}
 .toprow{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px}
+.cols{display:flex;flex-direction:column;gap:8px}
+.colslbl{font-size:12px;letter-spacing:.06em;text-transform:uppercase;font-weight:600;color:var(--muted)}
+.colchips{display:flex;flex-wrap:wrap;gap:8px}
+.colchip{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer;min-width:0}
+.colchip:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+.colchip input{margin-top:3px;accent-color:var(--accent)}
+.colchip span{display:flex;flex-direction:column;min-width:0}
+.colchip small{color:var(--muted);font-size:12px}
 .credit{color:var(--muted);font-size:12.5px;margin:0;text-align:center}
 @media (max-width:480px){.panel{padding:16px}.item .txt{font-size:15.5px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -132,6 +140,10 @@ button{font:inherit;cursor:pointer}
       <strong>Glissez votre fichier ici</strong>
       <span>ou touchez pour choisir · Word (.docx) ou Excel (.xlsx)</span>
     </label>
+    <div class="cols" id="cols" hidden>
+      <span class="colslbl">Colonnes du tableau à corriger</span>
+      <div class="colchips" id="colchips"></div>
+    </div>
     <div class="filebar" id="filebar" hidden>
       <span class="filename" id="fname"></span>
       <span class="meta" id="fmeta"></span>
@@ -199,12 +211,35 @@ let sample = null, downloads = null;
 const st = { buf:null, name:'', kind:null, items:[], example:true, failed:[], running:false, stopped:false, ctls:new Set(), engine:'libre', resultEngine:null };
 
 /* ---------- Lecture des fichiers ---------- */
-const parseXml = s => new DOMParser().parseFromString(s, 'application/xml');
-const declOf = s => (s.match(/^\s*<\?xml[^?]*\?>/) || ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'])[0].trim();
+const parseXml = s => {
+  const doc = new DOMParser().parseFromString(s.replace(/^\uFEFF/, ''), 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) throw new Error('xml');
+  return doc;
+};
+const declOf = s => (s.replace(/^\uFEFF/, '').match(/^\s*<\?xml[^?]*\?>/) || ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'])[0].trim();
 const letters = t => (t.match(/\p{L}/gu) || []).length >= 2;
 
 function inFallback(el){ for (let p = el.parentNode; p && p.nodeType === 1; p = p.parentNode) if (p.localName === 'Fallback' && p.namespaceURI === MC) return true; return false; }
 
+function cellInfo(p, path){
+  let tc = null;
+  for (let e = p.parentNode; e && e.nodeType === 1; e = e.parentNode){
+    if (e.namespaceURI !== W) continue;
+    if (e.localName === 'tc'){ tc = e; break; }
+    if (e.localName === 'p' || e.localName === 'txbxContent') return null;
+  }
+  if (!tc) return null;
+  const tr = tc.parentNode, tbl = tr && tr.parentNode;
+  if (!tbl || tbl.localName !== 'tbl') return null;
+  const colOf = cell => { let c = 0; for (const x of cell.parentNode.childNodes){ if (x === cell) return c; if (x.nodeType === 1 && x.localName === 'tc'){
+    const gs = x.getElementsByTagNameNS(W, 'gridSpan')[0]; c += gs ? (+gs.getAttributeNS(W, 'val') || +gs.getAttribute('w:val') || 1) : 1; } } return c; };
+  const col = colOf(tc);
+  const rows = [...tbl.childNodes].filter(x => x.nodeType === 1 && x.localName === 'tr');
+  const tables = [...tbl.ownerDocument.getElementsByTagNameNS(W, 'tbl')];
+  let head = '';
+  if (rows[0]) for (const c of rows[0].childNodes){ if (c.nodeType === 1 && c.localName === 'tc' && colOf(c) === col){ head = [...c.getElementsByTagNameNS(W, 't')].map(t => t.textContent).join('').trim(); break; } }
+  return { key: path + '#' + tables.indexOf(tbl) + ':' + col, col, row: rows.indexOf(tr) + 1, head: head.slice(0, 30) };
+}
 function collectW(el, segs){
   for (const c of el.childNodes){
     if (c.nodeType !== 1) continue;
@@ -238,7 +273,8 @@ async function extract(zip, kind){
         if (!segs.some(s => s.t)) continue;
         n++;
         if (!letters(text)) continue;
-        items.push({ id:'w' + items.length, label:`${base} · paragraphe ${n}`, segs, text, path });
+        const col = cellInfo(p, path);
+        items.push({ id:'w' + items.length, label: col ? `Ligne ${col.row} · ${col.head || 'colonne ' + (col.col + 1)}` : `${base} · paragraphe ${n}`, segs, text, path, col });
       }
     }
   } else {
@@ -539,11 +575,11 @@ async function run(batchesOverride){
   st.running = true; st.stopped = false; setRunning(true); showMsg('');
   let claudeOut = null;
   if (engine === 'libre' || engine === 'compare'){
-    const ok = await runLibre(st.items);
+    const ok = await runLibre(active());
     if (!ok && !st.stopped){ st.running = false; setRunning(false); render(); return; }
   }
   if (!st.stopped && (engine === 'claude' || engine === 'compare' || engine === 'claude-retry')){
-    claudeOut = await runClaude(batchesOverride || makeBatches(st.items));
+    claudeOut = await runClaude(batchesOverride || makeBatches(active()));
   }
   st.running = false; setRunning(false);
   const n = st.failed.length;
@@ -558,16 +594,47 @@ async function run(batchesOverride){
 
 /* ---------- Interface ---------- */
 function showMsg(text, kind){ const m = $('msg'); m.hidden = !text; m.textContent = text || ''; m.className = 'notice' + (kind === 'info' ? ' info' : ''); }
+const active = () => st.items.filter(it => !it.skip);
+function buildCols(){
+  const groups = new Map();
+  for (const it of st.items) if (it.col){
+    const g = groups.get(it.col.key) || { key:it.col.key, head:it.col.head, col:it.col.col, n:0, chars:0 };
+    g.n++; g.chars += it.text.length; groups.set(it.col.key, g);
+  }
+  const list = [...groups.values()].filter(g => g.n >= 3);
+  const box = $('colchips'); box.innerHTML = '';
+  $('cols').hidden = !list.length;
+  if (!list.length) return;
+  const max = Math.max(...list.map(g => g.chars / g.n));
+  list.forEach((g, k) => {
+    const on = g.chars / g.n >= Math.min(25, max * 0.5);
+    const id = 'col-' + k;
+    const lab = document.createElement('label'); lab.className = 'colchip';
+    lab.innerHTML = `<input type="checkbox" id="${id}"${on ? ' checked' : ''}><span><b></b><small></small></span>`;
+    lab.querySelector('b').textContent = g.head || 'Colonne ' + (g.col + 1);
+    lab.querySelector('small').textContent = `${fmt(g.n)} cellules`;
+    const apply = () => { const c = lab.querySelector('input').checked; st.items.forEach(it => { if (it.col && it.col.key === g.key) it.skip = !c; }); };
+    lab.querySelector('input').addEventListener('change', () => { apply(); updateMeta(); render(); $('start').disabled = !canStart(); });
+    apply(); box.appendChild(lab);
+  });
+  updateMeta();
+}
+function updateMeta(){
+  const items = active(), chars = items.reduce((n, it) => n + it.text.length, 0);
+  $('fmeta').textContent = st.items.length
+    ? `${fmt(items.length)} passage${items.length > 1 ? 's' : ''} à corriger · ${fmt(chars)} signes`
+    : 'Aucun texte à corriger dans ce fichier';
+}
 function needsClaude(){ return st.engine !== 'libre'; }
-function canStart(){ return !st.running && !!st.buf && st.items.length > 0 && (!needsClaude() || !!sample); }
+function canStart(){ return !st.running && !!st.buf && active().length > 0 && (!needsClaude() || !!sample); }
 function setRunning(on){
   $('stop').hidden = !on; $('start').disabled = !canStart();
   $('retry').hidden = true; $('file').disabled = on;
   document.querySelectorAll('input[name="engine"]').forEach(r => r.disabled = on || (r.value !== 'libre' && !sample));
   updateExport();
 }
-const countChunks = () => st.items.reduce((n, it) => n + (it.chunks ? it.chunks.length : 0), 0);
-const countOn = () => st.items.reduce((n, it) => n + (it.chunks ? it.chunks.filter(c => c.on).length : 0), 0);
+const countChunks = () => st.items.reduce((n, it) => n + (it.chunks && !it.skip ? it.chunks.length : 0), 0);
+const countOn = () => st.items.reduce((n, it) => n + (it.chunks && !it.skip ? it.chunks.filter(c => c.on).length : 0), 0);
 const SRC = { C:'Claude', L:'Libre', LC:'Les deux' };
 const SRCSHORT = { C:'C', L:'L', LC:'C+L' };
 
@@ -608,19 +675,19 @@ function renderItem(it, idx){
   return `<article class="item"><div class="where"><span>${esc(it.label)}</span><span>${n} proposition${n > 1 ? 's' : ''}</span></div><div class="txt">${parts.join('')}</div>${reasons ? `<ul class="reasons">${reasons}</ul>` : ''}</article>`;
 }
 function updateCount(){
-  const total = countChunks(), on = countOn(), shown = st.items.filter(it => it.chunks && it.chunks.length).length;
+  const total = countChunks(), on = countOn(), shown = st.items.filter(it => it.chunks && it.chunks.length && !it.skip).length;
   $('count').textContent = total ? `${fmt(total)} proposition${total > 1 ? 's' : ''} dans ${fmt(shown)} passage${shown > 1 ? 's' : ''} · ${fmt(on)} acceptée${on > 1 ? 's' : ''}` : '';
   const cmp = st.resultEngine === 'compare' && total;
   $('stats').hidden = !cmp; $('legend').hidden = !cmp;
   if (cmp){
     const c = { LC:0, C:0, L:0 };
-    st.items.forEach(it => (it.chunks || []).forEach(ch => c[ch.src]++));
+    st.items.forEach(it => { if (!it.skip) (it.chunks || []).forEach(ch => c[ch.src]++); });
     $('stats').innerHTML = [['LC','Trouvées par les deux'],['C','Claude seul'],['L','Libre seul']]
       .map(([k, t]) => `<div class="stat"><span class="src src-${k}">${SRCSHORT[k]}</span><b>${fmt(c[k])}</b><span>${t}</span></div>`).join('');
   }
 }
 function render(){
-  const shown = st.items.map((it, i) => [it, i]).filter(([it]) => it.chunks && it.chunks.length);
+  const shown = st.items.map((it, i) => [it, i]).filter(([it]) => it.chunks && it.chunks.length && !it.skip);
   $('exampleTag').hidden = !st.example;
   const box = $('items');
   if (!shown.length){
@@ -665,12 +732,9 @@ async function loadFile(file){
     const zip = await JSZip.loadAsync(buf);
     const { items } = await extract(zip, ext);
     Object.assign(st, { buf, name:file.name, kind:ext, items, example:false, failed:[], resultEngine:null });
-    const chars = items.reduce((n, it) => n + it.text.length, 0);
     $('filebar').hidden = false; $('fname').textContent = file.name;
-    $('fmeta').textContent = items.length
-      ? `${fmt(items.length)} ${ext === 'docx' ? 'paragraphe' : 'cellule'}${items.length > 1 ? 's' : ''} de texte · ${fmt(chars)} signes`
-      : 'Aucun texte à corriger dans ce fichier';
     $('progress').hidden = true; $('retry').hidden = true;
+    buildCols();
     $('start').disabled = !canStart();
     $('dlstatus').textContent = '';
     render();
@@ -702,7 +766,7 @@ async function buildOutput(){
   const ctx = { id:900000 + Math.floor(Math.random() * 50000), date:new Date().toISOString().replace(/\.\d+Z$/, 'Z') };
   let applied = 0;
   for (const rev of st.items){
-    if (!rev.chunks || !rev.chunks.some(c => c.on)) continue;
+    if (rev.skip || !rev.chunks || !rev.chunks.some(c => c.on)) continue;
     const f = fresh.get(rev.id); if (!f || f.text !== rev.text) continue;
     const P = buildPieces(f, rev.chunks);
     f.segs.forEach((s, k) => {
@@ -733,7 +797,7 @@ $('dl').onclick = async () => {
 $('report').onclick = async () => {
   const q = s => '"' + String(s).replace(/"/g, '""').replace(/\t/g, ' ').replace(/\n/g, ' ') + '"';
   const rows = [['Emplacement','Avant','Après','Proposé par','Statut'].map(q).join(';')];
-  for (const it of st.items) for (const c of it.chunks || []) rows.push([it.label, c.del, c.ins, SRC[c.src], c.on ? 'Acceptée' : 'Refusée'].map(q).join(';'));
+  for (const it of st.items) if (!it.skip) for (const c of it.chunks || []) rows.push([it.label, c.del, c.ins, SRC[c.src], c.on ? 'Acceptée' : 'Refusée'].map(q).join(';'));
   try {
     await downloads.save({ filename:`${baseName()} - corrections.csv`, data:'﻿' + rows.join('\r\n') });
     $('dlstatus').textContent = 'Rapport enregistré.';

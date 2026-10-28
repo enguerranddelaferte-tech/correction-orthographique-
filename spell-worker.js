@@ -1,9 +1,18 @@
 /* Correcteur orthographique libre : nspell (MIT) + dictionnaire français Dicollecte (MPL 2.0) */
 importScripts('nspell.js');
 let sp = null;
+/* Lexique du métier (militaria, ventes aux enchères) et mots étrangers fréquents, acceptés tels quels */
+const LEXIQUE = `litzens litzen nuquière nuquières troddel léchure léchures sanglon sanglons brelage brelages tombô monogrammé monogrammée
+monogrammés monogrammées bouclerie badois badoise badoises hessois hessoise hessoises tornister ricasso rebronzé rebronzée diam fab regt
+feldgrau leutnant tinnie pounder ordnance insolé insolée insolés insolées entoilé entoilée entoilés entoilées repercé repercée
+porte-plumet cannetille soutache soutaches garance cachou galuchat maillechort basane basanes quillon fusée shako shakos képi képis
+zu für von aus dem der die das des und mit im am vom zum bei nach einer eines deutsche deutscher deutsches battle dress group medal
+jubilee squadron sergeant korps the of and for with army`.split(/\s+/);
 const cache = new Map();
 const WORD = /[\p{L}\p{M}]+(?:[-'’][\p{L}\p{M}]+)*/gu;
 const SKIP = /\b(?:https?:\/\/|www\.)\S+|[\w.+-]+@[\w-]+\.[\w.]+/g;
+const QUOTED = /"[^"\n]{1,200}"|“[^”\n]{1,200}”|«[^»\n]{1,200}»/g;
+const strip = s => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 const ELISION = /^(c|d|j|l|m|n|s|t|qu|jusqu|lorsqu|puisqu|quoiqu|presqu)(['’])(.+)$/i;
 
 function ok(w){
@@ -21,8 +30,11 @@ function suggest(w){
   const el = w.match(ELISION);
   if (el){ const s = suggest(el[3]); out = s ? el[1] + el[2] + s : null; }
   else if (w.length <= 24){
-    const s = sp.suggest(w);
-    if (s.length) out = s[0];
+    const lower = w === w.toLowerCase();
+    const list = sp.suggest(w).filter(s => !lower || s === s.toLowerCase());
+    const same = list.find(s => strip(s) === strip(w));             // même mot, accent corrigé
+    const first = strip(w)[0];
+    out = same || list.find(s => strip(s)[0] === first) || null;     // sinon, même première lettre
   }
   cache.set(w, out);
   return out;
@@ -38,6 +50,7 @@ function atSentenceStart(text, i){
 function checkText(text){
   const blocked = [];
   for (const m of text.matchAll(SKIP)) blocked.push([m.index, m.index + m[0].length]);
+  for (const m of text.matchAll(QUOTED)) blocked.push([m.index, m.index + m[0].length]);
   let out = '', last = 0;
   const fixes = [];
   for (const m of text.matchAll(WORD)){
@@ -48,7 +61,8 @@ function checkText(text){
     const bare = w.replace(/[-'’]/g, '');
     if (/^\p{Lu}{2,}$/u.test(bare)) continue;            // sigles
     if (/\p{Lu}/u.test(bare.slice(1))) continue;          // casse mixte (noms de marques, codes)
-    if (/^\p{Lu}/u.test(w) && !atSentenceStart(text, i)) continue; // noms propres
+    if (/^\p{Lu}/u.test(w)) continue;                     // noms propres, débuts de phrase, intitulés
+    if (w.length <= 4 && /[.:]/.test(text[i + w.length] || '')) continue; // abréviations (imp., fab., env., diam:)
     if (ok(w)) continue;
     const s = suggest(w);
     if (!s || s === w) continue;
@@ -64,6 +78,7 @@ self.onmessage = async e => {
     try {
       const [aff, dic] = await Promise.all([fetch(msg.aff).then(r => r.text()), fetch(msg.dic).then(r => r.text())]);
       sp = self.NSpell({ aff, dic });
+      LEXIQUE.forEach(w => w && sp.add(w));
       self.postMessage({ type:'ready' });
     } catch (err){ self.postMessage({ type:'error', message:String(err && err.message || err) }); }
     return;
