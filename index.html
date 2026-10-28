@@ -76,6 +76,7 @@ button{font:inherit;cursor:pointer}
 .tag{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600;padding:2px 8px;border-radius:99px;background:var(--warn-bg);color:var(--warn)}
 .items{display:flex;flex-direction:column;gap:12px}
 .item{background:var(--sheet);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.item .where span:first-child{color:var(--ink);font-weight:600;font-size:13px}
 .item .where{font-family:var(--f-mono);font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .item .txt{font-family:var(--f-text);font-size:16.5px;line-height:1.65;overflow-wrap:anywhere;white-space:pre-wrap}
 .ell{color:var(--muted)}
@@ -238,7 +239,10 @@ function cellInfo(p, path){
   const tables = [...tbl.ownerDocument.getElementsByTagNameNS(W, 'tbl')];
   let head = '';
   if (rows[0]) for (const c of rows[0].childNodes){ if (c.nodeType === 1 && c.localName === 'tc' && colOf(c) === col){ head = [...c.getElementsByTagNameNS(W, 't')].map(t => t.textContent).join('').trim(); break; } }
-  return { key: path + '#' + tables.indexOf(tbl) + ':' + col, col, row: rows.indexOf(tr) + 1, head: head.slice(0, 30) };
+  const firstCell = [...tr.childNodes].find(c => c.nodeType === 1 && c.localName === 'tc');
+  const firstTxt = firstCell && firstCell !== tc ? [...firstCell.getElementsByTagNameNS(W, 't')].map(t => t.textContent).join('').trim().replace(/[,;.]+$/, '').trim() : '';
+  const lot = /^(?:n°\s*)?\d+(?:[,.]\d+)?(?:\s*(?:bis|ter|[a-z]))?$/i.test(firstTxt) ? firstTxt : '';
+  return { key: path + '#' + tables.indexOf(tbl) + ':' + col, col, row: rows.indexOf(tr) + 1, head: head.slice(0, 30), lot };
 }
 function collectW(el, segs){
   for (const c of el.childNodes){
@@ -274,7 +278,7 @@ async function extract(zip, kind){
         n++;
         if (!letters(text)) continue;
         const col = cellInfo(p, path);
-        items.push({ id:'w' + items.length, label: col ? `Ligne ${col.row} · ${col.head || 'colonne ' + (col.col + 1)}` : `${base} · paragraphe ${n}`, segs, text, path, col });
+        items.push({ id:'w' + items.length, label: col ? (col.lot ? `Lot ${col.lot}` : `Ligne ${col.row}`) + ` · ${col.head || 'colonne ' + (col.col + 1)}` : `${base} · paragraphe ${n}`, segs, text, path, col });
       }
     }
   } else {
@@ -796,8 +800,8 @@ $('dl').onclick = async () => {
 };
 $('report').onclick = async () => {
   const q = s => '"' + String(s).replace(/"/g, '""').replace(/\t/g, ' ').replace(/\n/g, ' ') + '"';
-  const rows = [['Emplacement','Avant','Après','Proposé par','Statut'].map(q).join(';')];
-  for (const it of st.items) if (!it.skip) for (const c of it.chunks || []) rows.push([it.label, c.del, c.ins, SRC[c.src], c.on ? 'Acceptée' : 'Refusée'].map(q).join(';'));
+  const rows = [['Lot','Emplacement','Avant','Après','Proposé par','Statut'].map(q).join(';')];
+  for (const it of st.items) if (!it.skip) for (const c of it.chunks || []) rows.push([it.col && it.col.lot ? it.col.lot : '', it.label, c.del, c.ins, SRC[c.src], c.on ? 'Acceptée' : 'Refusée'].map(q).join(';'));
   try {
     await downloads.save({ filename:`${baseName()} - corrections.csv`, data:'﻿' + rows.join('\r\n') });
     $('dlstatus').textContent = 'Rapport enregistré.';
