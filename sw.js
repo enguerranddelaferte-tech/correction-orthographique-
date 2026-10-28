@@ -1,5 +1,5 @@
 /* Hors connexion : tous les fichiers de l'application sont mis en cache à l'installation. */
-const VERSION = 'correcteur-v6';
+const VERSION = 'correcteur-v7';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'jszip.min.js', 'nspell.js', 'spell-worker.js', 'fr.aff', 'fr.dic', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {
@@ -17,5 +17,11 @@ self.addEventListener('fetch', e => {
     return;
   }
   if (url.origin !== location.origin) return;
-  e.respondWith(caches.match(req, { ignoreSearch:true }).then(hit => hit || fetch(req).catch(() => caches.match('index.html'))));
+  // Page et scripts : d'abord le réseau (pour avoir toujours la dernière version), le cache hors connexion
+  if (req.mode === 'navigate' || /\.(html|js|webmanifest)$/.test(url.pathname) || url.pathname.endsWith('/')){
+    e.respondWith(fetch(req).then(res => { if (res.ok){ const copy = res.clone(); caches.open(VERSION).then(c => c.put(req, copy)); } return res; })
+      .catch(() => caches.match(req, { ignoreSearch:true }).then(hit => hit || caches.match('index.html'))));
+    return;
+  }
+  e.respondWith(caches.match(req, { ignoreSearch:true }).then(hit => hit || fetch(req)));
 });
